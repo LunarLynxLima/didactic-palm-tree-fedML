@@ -1,9 +1,11 @@
 #! /home/shamik/.local/lib/python3.8/site-packages
-
-# nvidia-smi
-# source fedml/bin/activate ## to get into environment
-# git add --all
-# git reset HEAD prospire_FL_shared/fedml/
+"""
+nvidia-smi
+## to get into environment
+source fedml/bin/activate 
+git add --all
+git reset HEAD prospire_FL_shared/fedml/
+"""
 
 from Federated import FederatedWorker
 from Parameters import Parameters
@@ -44,8 +46,8 @@ def main():
     use_aug = False
 
     start_training = True
-    n_workers = 2           # number of workers to use for federated learning :: 1 means traditional learning without FL
-    w_epochs = 10          # w_epochs = 0 (have trd. training); w_epochs > 0 (have fed. training)
+    n_workers = 1           # number of workers to use for federated learning :: 1 means traditional learning without FL
+    w_epochs = 0          # w_epochs = 0 (have trd. training); w_epochs > 0 (have fed. training)
     epochs = 1
     n = 70                 # max training samples are 70
 
@@ -106,7 +108,10 @@ def main():
         temp_pred = nunet_obj_rti.predict_rss(train_x_images, True)
         temp_err = np.where(train_y_images == 0.0, train_y_images, np.abs(temp_pred - train_y_images))
         # print('Final train_error', (np.sum(temp_err)) / np.count_nonzero(temp_err))/
-        return (np.sum(temp_err)) / np.count_nonzero(temp_err)
+        
+        train_error = (np.sum(temp_err)) / np.count_nonzero(temp_err)
+        del temp_err  # Free the temporary variable
+        return train_error            
     def compute_test_error(nunet_obj_rti, test_x_images = test_x_images, test_y_images = test_y_images):
         nunet_rti_prediction = []
 
@@ -127,23 +132,25 @@ def main():
         for item, vals in zip(test_x_images_new, test_y_images_new):
             temp_unet = nunet_obj_rti.predict_rss(item)
             nunet_rti_prediction.append(temp_unet)
-
-
+            
             # plt.imshow(temp_unet, aspect='auto')
             # plt.show()
-            #
             # plt.imshow(vals, aspect='auto')
             # plt.show()
 
         nunet_rti_prediction = np.reshape(np.array(nunet_rti_prediction), test_y_images_new.shape)
         temp_err = np.where(test_y_images_new == 0.0, test_y_images_new, np.abs(nunet_rti_prediction - test_y_images_new))
+        test_error = np.sum(temp_err) / np.count_nonzero(temp_err)
+
+        # Free the temporary variables
+        del nunet_rti_prediction, test_x_images_new, test_y_images_new, temp_err
         # print('Final test error', np.sum(temp_err) / np.count_nonzero(temp_err))
 
         # errors = np.array([i for i in nunet_rti_prediction.flatten() if i != 0.0])
         # print(errors.mean(), errors.min(), errors.max())
-
-
-        return np.sum(temp_err) / np.count_nonzero(temp_err)
+        # return np.sum(temp_err) / np.count_nonzero(temp_err)
+        
+        return test_error
 
     if use_aug:
         train_x_images, train_y_images = augmentation(train_x_images, train_y_images)
@@ -154,8 +161,8 @@ def main():
 
     nunet_obj_rti = UnetClass(para, num_pixels_x, num_pixels_y, train_x_images.shape[1], 0, False) # Global object (Model)
 
-    if w_epochs == 0:
-        epochs = 200
+    if w_epochs <= 0:
+        # epochs = 200
         for epoch in range(epochs):
             nunet_obj_rti.training(train_x_images, train_y_images, start_training, worker_epochs=1)    # trd. training
             train_errors.append(compute_train_error(nunet_obj_rti, train_x_images, train_y_images))
@@ -163,8 +170,8 @@ def main():
             print(f'epoch{epoch}: Global train_error {train_errors[-1]}', end = '; ') # compute train error
             print(f'epoch{epoch}: Global test error {test_errors[-1]}\n')     # prediction
     else:
-        epochs = nunet_obj_rti.best_epochs//w_epochs
-        epochs = 100
+        # epochs = nunet_obj_rti.best_epochs//w_epochs
+        # epochs = 1
 
         # intialize workers
         workers_nunet_obj_rti = [UnetClass(para, num_pixels_x, num_pixels_y, train_x_images.shape[1], i, False) for i in range(n_workers)]
@@ -175,7 +182,7 @@ def main():
 
             v, t = [], []
             for i, worker in enumerate(workers):
-                print('worker', i)
+                print('worker', i+1)
                 val_loss, train_loss, _ = worker.train_local_model(accelerate = True)        # Training each worker for w_epochs
                 print(compute_train_error(worker.nunet_obj, worker.train_x_images, worker.train_y_images))
                 
@@ -187,7 +194,7 @@ def main():
             for i in range(len(workers)):
                 print(f'W_{i} epoch{epoch} train_error {compute_train_error( workers[i].nunet_obj, train_x_images, train_y_images)}') # compute train error
                 print(f'W_{i} epoch{epoch} test error {compute_test_error( workers[i].nunet_obj, test_x_images, test_y_images)}')      # prediction
-            _, _ = FederatedWorker.federated_averaging(nunet_obj_rti, workers)              # Calculating global model from all workers(Avg); and sharing them
+            _ = FederatedWorker.federated_averaging(nunet_obj_rti, workers)              # Calculating global model from all workers(Avg); and sharing them
 
             # nunet_obj_rti.model.set_weights(global_weights)
             # for i in range(len(workers)): workers[i].nunet_obj.model.set_weights(avg_weights)
@@ -204,12 +211,89 @@ def main():
             # tqdm.write(f"Epoch {epoch + 1} completed")
             # progress_bar.set_description(f"Epoch {epoch + 1}")
             
+            del v,t
+            
             # if system RAM usage increased by 80%, exit the code
             check_system_memory_usage()
         workers[-1].visualize_divided_data(datapoints = visualize_fed_data, workers = workers)
 
     print(f'Final train_error {compute_train_error(nunet_obj_rti, train_x_images, train_y_images)}') # compute train error
     print(f'Final test error {compute_test_error(nunet_obj_rti, test_x_images, test_y_images)}')     # prediction
+
+    
+    epochs = [i for i in range(len(train_errors))]
+    global_train_errors = train_errors
+    global_test_errors = test_errors
+
+    print(len(global_train_errors))
+    print(len(global_test_errors))
+    print(epochs)
+
+    plt.figure(figsize=(12, 6))
+    plt.plot(epochs, global_train_errors, label='Global Train Error', marker='o')
+    plt.plot(epochs, global_test_errors, label='Global Test Error', marker='o')
+    plt.xlabel('Epochs')
+    plt.ylabel('Error')
+    plt.title('Global Train and Test Errors Over Epochs')
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+    
+
+    # Plotting the train and validation losses for each worker
+    plt.figure(figsize=(12, 8))
+    
+    print(train_errors)
+    print(test_errors)
+    print(val_losses)
+    print(train_losses)
+
+    # flattenn losses
+    ftrain_losses = [item for sublist in train_losses for item in sublist]
+    fval_losses = [item for sublist in val_losses for item in sublist]
+    print(ftrain_losses)
+    print(fval_losses)
+    
+    # Provided data
+    train_losses = ftrain_losses[:]
+    val_losses = fval_losses[:]
+
+    global_train_errors = train_errors
+    global_test_errors = test_errors
+    
+    plt.plot(global_train_errors, marker='+', linestyle='-', color='g', label='Global Train Error')
+    plt.plot(global_test_errors, marker='+', linestyle='-', color='r', label='Global Train Error')
+    
+    
+    # Initializing lists for each worker
+    worker_train_losses = [[] for _ in range(n_workers)]
+    worker_val_losses = [[] for _ in range(n_workers)]
+
+    # Separating losses for each worker
+    for i in range(n_workers):
+        worker_train_losses[i] = train_losses[i::n_workers]
+        worker_val_losses[i] = val_losses[i::n_workers]
+
+    # Example of how to access the losses for plotting (similar to previous code)
+    for i in range(n_workers):
+        plt.plot(worker_train_losses[i], marker='o', linestyle='-', label=f'Worker {i+1} Train Loss')
+        plt.plot(worker_val_losses[i], marker='o', linestyle='--', label=f'Worker {i+1} Val Loss')
+
+
+    epochs = list(range(1, len(worker_train_losses[0]) + 1))
+    print(epochs)
+    plt.plot(epochs, train_losses[:len(worker_train_losses[0])], label='Baseline Training Loss')
+    plt.plot(epochs, val_losses[:len(worker_train_losses[0])], label='Baseline Validation Loss')
+
+    # Adding titles and labels
+    plt.title('Train and Validation Losses for Each Worker')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+
+    epochs, train_loss, val_loss = epochs[:], train_errors[:150], test_errors[:150]
 
 if __name__ == "__main__":
     main()

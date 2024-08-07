@@ -2,6 +2,7 @@ from matplotlib import pyplot as plt
 import tensorflow as tf
 import numpy as np
 import time
+import gc
 
 class FederatedWorker:
     def __init__(self, worker_id, nunet_obj, train_x_images, train_y_images, params, worker_epochs:int=100, total_workers:int=4):
@@ -39,7 +40,6 @@ class FederatedWorker:
                 mask[i, 3] = mask[i, 1]
                 y_mask[i] = mask[i, 1]
                 # mask[i, 3] = np.random.choice([0, 1], size=tensor.shape[2:], p=[1-prob, prob])
-
         else: raise ValueError("Tensor must be a 4D batch of 3D tensors.")
         return tf.convert_to_tensor(mask, dtype=dtype), tf.convert_to_tensor(y_mask, dtype=dtype)
 
@@ -52,6 +52,10 @@ class FederatedWorker:
         self.nunet_obj.training(self.train_x_images, self.train_y_images, start_training=True, worker_epochs=self.worker_epochs, accelerate = accelerate)
         training_time = (time.time() - start_time)
         val_loss, train_loss = self.nunet_obj.get_train_stats() 
+        
+        # Delete variables and force garbage collection
+        del start_time
+        gc.collect()
         return val_loss, train_loss, training_time
 
     def federated_averaging(global_obj, worker_objs):
@@ -63,7 +67,6 @@ class FederatedWorker:
             for j in range(len(avg_weights)): avg_weights[j] += local_weights[j] * weights[i]
 
         for i, worker_obj in enumerate(worker_objs): worker_objs[i].nunet_obj.model.set_weights(avg_weights)
-
         global_obj.model.set_weights(avg_weights)
 
         # for j in range(len(avg_weights)):
@@ -71,8 +74,11 @@ class FederatedWorker:
         #         continue
         #     else:
         #         print('weight mismatch')
-
-        return global_obj.model.get_weights(), avg_weights
+        # Delete variables and force garbage collection
+        del local_weights, weights, i, avg_weights, worker_obj, worker_objs
+        gc.collect()
+        
+        return global_obj.model.get_weights()#, avg_weights
 
     def visualize_divided_data(self, datapoints=1, workers=[], colorbar = False, max_workers_visualized = 5, full_plot = True):
         features = ['X1 = primary transmitter', 'X2 = Receiver (RSS measurements for X1)', 'X3 = Area Map', 'X4 = Shadow fading on links b/w X1']

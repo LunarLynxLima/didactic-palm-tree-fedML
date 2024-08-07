@@ -153,7 +153,7 @@ class UnetClass:
 
         return mean_loss_masked
 
-    def training(self, train_x, train_y, start_training, worker_epochs = 0, accelerate = False):
+    def training(self, train_x, train_y, start_training, worker_epochs = 0, accelerate = False, verbose = 1):
         # if not start_training:
         #     self.model = load_model(self.model_file, custom_objects={'custom_loss': self.custom_loss})
         #     return
@@ -187,27 +187,18 @@ class UnetClass:
             pass
 
         # adam = optimizers.Adam(learning_rate=0.0001, beta_1=0.9, beta_2=0.999, decay=0.0)       # :: use this for keras2
-        # adam = optimizers.Adam(learning_rate=0.0001, beta_1=0.9, beta_2=0.999)                    # :: use this for keras3
+        # adam = optimizers.Adam(learning_rate=0.0001, beta_1=0.9, beta_2=0.999)                  # :: use this for keras3
         if self.use_custom_loss:
-            self.model.compile(loss=self.custom_loss, optimizer='adam')
+            self.model.compile(optimizer='adam', loss=self.custom_loss)
         else:
             self.model.compile(optimizer='adam', loss="mean_absolute_error")
             # model.compile(optimizer='adam', loss="mean_squared_error")
         # model.summary()
 
         #### Code added
-        verbose = 1
         device = "/gpu:0" if tf.config.list_physical_devices('GPU') else "/cpu:0"
-        if worker_epochs != 0:
-            self.best_epochs = worker_epochs
-        #     verbose = 1
-        # else:
-        #     self.best_epochs = 200
-        #     verbose = 1
-        if accelerate :
-            #print("Using device:", device)
-            train_x, train_y = tf.convert_to_tensor(train_x), tf.convert_to_tensor(train_y)
-
+        # device = "/cpu:0"
+        if worker_epochs != 0: self.best_epochs = worker_epochs
         ####
 
         if self.image_preprocessing == 'normalize':
@@ -227,7 +218,7 @@ class UnetClass:
                                      callbacks=[self.es, self.mc],
                                      validation_data=self.datagen.flow(x_val, y_val, batch_size=self.best_batch_size),
                                      validation_steps=math.ceil(len(x_val) / float(self.best_batch_size)),
-                                     verbose=0)
+                                     verbose=verbose)
 
         else:
             with tf.device(device):
@@ -236,7 +227,7 @@ class UnetClass:
                                         batch_size=self.best_batch_size,
                                         epochs=self.best_epochs,
                                         callbacks=[self.es, self.mc, self.tensorboard_callback],
-                                        verbose=1,
+                                        verbose=verbose,
                                         shuffle=True)
 
         if self.use_custom_loss:
@@ -259,9 +250,8 @@ class UnetClass:
         # print(107 * (np.sum(temp_err)) / np.count_nonzero(temp_err))
 
         # Delete variables and force garbage collection
-        del train_x, train_y, history, device, verbose
-        if self.image_preprocessing == 'normalize':
-            del x_val, y_val, train_idxs, val_idxs
+        if self.image_preprocessing == 'normalize': del x_val, y_val, train_idxs, val_idxs
+        del train_x, train_y, worker_epochs, history, device, verbose
         gc.collect()
 
         # Clear session to free memory
