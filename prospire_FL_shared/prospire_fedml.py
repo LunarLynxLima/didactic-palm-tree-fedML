@@ -2,139 +2,32 @@
 
 # nvidia-smi
 # source fedml/bin/activate ## to get into environment
-import tensorflow as tf
-from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
-from tensorflow.keras.utils import to_categorical
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense, Input, Dropout, Flatten, Conv1D, GlobalAveragePooling1D, MaxPooling1D, \
-    GlobalMaxPooling1D, LeakyReLU, BatchNormalization, Conv2D, MaxPool2D, Conv2DTranspose, Concatenate
-from tensorflow.keras.models import Model
-from tensorflow.keras.preprocessing.image import ImageDataGenerator
-from tensorflow.keras.preprocessing.sequence import TimeseriesGenerator
-from tensorflow.keras.models import load_model
-from tensorflow.keras import optimizers
-from tensorflow.keras import backend as K
-import json, itertools, random
-import math, datetime
-import gc
-from tensorflow.keras.backend import clear_session
-import numpy as np
-import timeit, time, os
-import h5py
-from matplotlib import pyplot as plt
+# git add --all
+# git reset HEAD prospire_FL_shared/fedml/
+
 from Parameters import Parameters
 from UnetClass import UnetClass
-import shutil
+from Federated import FederatedWorker
+
+from matplotlib import pyplot as plt
+import timeit, time, os, psutil, sys
+import tensorflow as tf
+import numpy as np
 
 import warnings
 warnings.filterwarnings("ignore")
 
-class FederatedWorker:
-    def __init__(self, worker_id, nunet_obj, train_x_images, train_y_images, params, worker_epochs:int=100, total_workers:int=4):
-        self.worker_id = worker_id
-        self.nunet_obj = nunet_obj
-        self.raw_train_x_images = train_x_images
-        self.raw_train_y_images = train_y_images
-        x_mask, y_mask = FederatedWorker.gen_mask(train_x_images, prob = 1/total_workers)
-        self.train_x_images = train_x_images * x_mask
-        self.train_y_images = train_y_images * y_mask
-        self.worker_epochs = worker_epochs
-        self.params = params
+# Function to check system memory usage
+def check_system_memory_usage(threshold=80):
+    memory = psutil.virtual_memory()
+    used_percent = memory.percent  # This gives the percentage of total memory used
+    print(f"Total Memory: {memory.total / (1024 * 1024):.2f} MB, Used Memory: {memory.used / (1024 * 1024):.2f} MB, Used Percent: {used_percent}%")
 
-    def gen_mask(tensor, prob=None, seed=42, dtype=tf.float32,):
-        """
-        Generates a batched masks.
-
-        Mask is all ones for idx 0 and 2, as per 0 is TX and 2 is location map.
-        For idx 1 and 3, it is 1 for sampled points with probability of 1/n or prob as prompted.
-
-        Parameters:
-        - tensor: The input tensor, expected to be 4D.
-        - prob: The probability for the mask sampling.
-        - dtype: The desired output tensor dtype.
-        - seed: Seed for random number generation. {For reproducibility :: np.random.seed(seed)} can't get seed different for different workers
-        """
-
-        if prob is None: return -1
-        mask = np.ones(tensor.shape)
-
-        y_mask = np.ones((tensor.shape[0], tensor.shape[2], tensor.shape[3]))
-        if len(tensor.shape) == 4:
-            for i in range(tensor.shape[0]):
-                mask[i, 1] = np.random.choice([0, 1], size=tensor.shape[2:], p=[1-prob, prob])
-                mask[i, 3] = mask[i, 1]
-                y_mask[i] = mask[i, 1]
-                # mask[i, 3] = np.random.choice([0, 1], size=tensor.shape[2:], p=[1-prob, prob])
-
-        else: raise ValueError("Tensor must be a 4D batch of 3D tensors.")
-        return tf.convert_to_tensor(mask, dtype=dtype), tf.convert_to_tensor(y_mask, dtype=dtype)
-
-    def train_local_model(self, accelerate = True):
-        """
-        Train local model,
-        Returns val_loss, and train_loss, training time
-        """
-        start_time = time.time()
-        self.nunet_obj.training(self.train_x_images, self.train_y_images, start_training=True, worker_epochs=self.worker_epochs, accelerate = accelerate)
-        training_time = (time.time() - start_time)
-        val_loss, train_loss = self.nunet_obj.get_train_stats() 
-        return val_loss, train_loss, training_time
-
-    def federated_averaging(global_obj, worker_objs):
-        weights = [1/len(worker_objs)]*len(worker_objs)
-        avg_weights = [np.zeros_like(w) for w in global_obj.model.get_weights()]
-
-        for i, worker_obj in enumerate(worker_objs):
-            local_weights = worker_obj.nunet_obj.model.get_weights()
-            for j in range(len(avg_weights)): avg_weights[j] += local_weights[j] * weights[i]
-
-        for i, worker_obj in enumerate(worker_objs): worker_objs[i].nunet_obj.model.set_weights(avg_weights)
-
-        global_obj.model.set_weights(avg_weights)
-
-        # for j in range(len(avg_weights)):
-        #     if np.array_equal(global_obj.model.get_weights()[j], avg_weights[j]):
-        #         continue
-        #     else:
-        #         print('weight mismatch')
-
-        return global_obj.model.get_weights(), avg_weights
-
-    def visualize_divided_data(self, datapoints=1, workers=[], colorbar = False, max_workers_visualized = 5, full_plot = True):
-        features = ['X1 = primary transmitter', 'X2 = Receiver (RSS measurements for X1)', 'X3 = Area Map', 'X4 = Shadow fading on links b/w X1']
-        features = ['X1', 'X2','X3', 'X4']
-        a = (1,4,2)
-        if full_plot: a = (0,4,1)
-        for i in range(datapoints):
-            for j in range(a[0], a[1], a[2]):
-                tensor1 = self.raw_train_x_images[i][j]
-                tensor0 = self.raw_train_y_images[i]
-                max_workers_visualized = min(len(workers), max_workers_visualized)
-                tensors = [worker.train_x_images[i][j] for worker in workers][:max_workers_visualized]
-                ytensors = [worker.train_y_images[i] for worker in workers][:max_workers_visualized]
-
-                fig, axs = plt.subplots(1, 2*len(tensors) +1, figsize=(20, 5))
-
-                p = 1
-                im0 = axs[0].imshow(tensor0, cmap='viridis')
-                axs[0].set_title(f'Y image of Datapoint_{i+1} :\n {features[j]}')
-                p+=1
-
-                im1 = axs[1].imshow(tensor1, cmap='viridis')
-                axs[2].set_title(f'Full Datapoint_{i+1} :\n {features[j]}')
-                p+=1
-
-                if colorbar and j == 3: fig.colorbar(im1, ax=axs[0])
-                for k, tensor2 in enumerate(tensors):
-                    # if k%2 == 0 : continue
-                    im2 = axs[2*k + 1].imshow(tensor2, cmap='viridis')
-                    axs[2*k +1].set_title(f'Worker_{k} Datapoint_{i+1} :\n {features[j]}')
-
-                    im1 = axs[2*k + 2].imshow(ytensors[k] , cmap='viridis')
-                    axs[2*k + 2].set_title(f'Sampled Y image of Datapoint_{i+1} :\n {features[j]}')
-                    # if colorbar and j == 3: fig.colorbar(im2, ax=axs[k + 1])
-                plt.tight_layout()
-            plt.show()
+    if used_percent > threshold:
+        print(f"System memory usage is more than {threshold}%, exiting...")
+        sys.exit()
+        
+    return
 
 def main():
     train_errors, test_errors, val_losses, train_losses = [], [], [], []
@@ -152,7 +45,7 @@ def main():
 
     start_training = True
     n_workers = 2           # number of workers to use for federated learning :: 1 means traditional learning without FL
-    w_epochs = 0          # w_epochs = 0 (have trd. training); w_epochs > 0 (have fed. training)
+    w_epochs = 10          # w_epochs = 0 (have trd. training); w_epochs > 0 (have fed. training)
     epochs = 1
     n = 70                 # max training samples are 70
 
@@ -280,8 +173,7 @@ def main():
         for epoch in range(epochs):
             print(f"Epoch {epoch + 1}/{epochs}")
 
-            v = []
-            t = []
+            v, t = [], []
             for i, worker in enumerate(workers):
                 print('worker', i)
                 val_loss, train_loss, _ = worker.train_local_model(accelerate = True)        # Training each worker for w_epochs
@@ -311,6 +203,9 @@ def main():
             # # Update the description to show the current epoch
             # tqdm.write(f"Epoch {epoch + 1} completed")
             # progress_bar.set_description(f"Epoch {epoch + 1}")
+            
+            # if system RAM usage increased by 80%, exit the code
+            check_system_memory_usage()
         workers[-1].visualize_divided_data(datapoints = visualize_fed_data, workers = workers)
 
     print(f'Final train_error {compute_train_error(nunet_obj_rti, train_x_images, train_y_images)}') # compute train error
