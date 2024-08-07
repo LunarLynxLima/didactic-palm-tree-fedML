@@ -5,9 +5,9 @@
 # git add --all
 # git reset HEAD prospire_FL_shared/fedml/
 
+from Federated import FederatedWorker
 from Parameters import Parameters
 from UnetClass import UnetClass
-from Federated import FederatedWorker
 
 from matplotlib import pyplot as plt
 import timeit, time, os, psutil, sys
