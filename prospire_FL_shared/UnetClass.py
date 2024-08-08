@@ -15,15 +15,26 @@ import math, datetime
 import gc
 from tensorflow.keras.backend import clear_session
 import numpy as np
-import timeit, time, os
+import timeit, time, os, sys,psutil
 import h5py
 import shutil
 from matplotlib import pyplot as plt
 from Parameters import Parameters
+
 from tensorflow.keras.utils import register_keras_serializable
 import warnings
 warnings.filterwarnings("ignore")
+# Function to check system memory usage
+def check_system_memory_usage(threshold=80):
+    memory = psutil.virtual_memory()
+    used_percent = memory.percent  # This gives the percentage of total memory used
+    print(f"Total Memory: {memory.total / (1024 * 1024):.2f} MB, Used Memory: {memory.used / (1024 * 1024):.2f} MB, Used Percent: {used_percent}%")
 
+    if used_percent > threshold:
+        print(f"System memory usage is more than {threshold}%, exiting...")
+        sys.exit()
+    del memory,used_percent, threshold
+    return
 class UnetClass:
 
     def __init__(self, params, img_height, img_width, img_depth, id, var_loss=False):
@@ -42,8 +53,7 @@ class UnetClass:
         self.best_batch_size, self.best_epochs = 1, 1000    # model parameters for the nn best_batch_size = 8, best epochs = 1000
         self.history_file = 'unet_history_' + str(id+10) + '.json'
         self.checkpoint_model_file = 'unet_best_model_' + str(id + 10) + '.keras'
-        if os.path.exists("./logs"):
-            shutil.rmtree("./logs")
+        if os.path.exists("./logs"): shutil.rmtree("./logs")
         os.mkdir("./logs")
         self.log_dir = "logs/" + "fit/" + 'Unet_' + str(id+10) + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
         self.tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=self.log_dir, histogram_freq=1)
@@ -154,6 +164,8 @@ class UnetClass:
         return mean_loss_masked
 
     def training(self, train_x, train_y, start_training, worker_epochs = 0, accelerate = False, verbose = 1):
+        # print('Training the model: memory checkup')
+        # check_system_memory_usage()
         # if not start_training:
         #     self.model = load_model(self.model_file, custom_objects={'custom_loss': self.custom_loss})
         #     return
@@ -201,6 +213,8 @@ class UnetClass:
         if worker_epochs != 0: self.best_epochs = worker_epochs
         ####
 
+        # print("Just Before training: memory checkup")
+        # check_system_memory_usage()
         if self.image_preprocessing == 'normalize':
             train_idxs = np.random.choice(np.arange(train_x.shape[0]), size=int(train_x.shape[0] * 0.8), replace=False)
             val_idxs = list(set(np.arange(train_x.shape[0])) - set(train_idxs))
@@ -229,7 +243,8 @@ class UnetClass:
                                         callbacks=[self.es, self.mc, self.tensorboard_callback],
                                         verbose=verbose,
                                         shuffle=True)
-
+        # print("Just After training: memory checkup")
+        # check_system_memory_usage()
         if self.use_custom_loss:
             self.model = load_model(self.checkpoint_model_file, custom_objects={'custom_loss': self.custom_loss})
         else:
@@ -256,6 +271,9 @@ class UnetClass:
 
         # Clear session to free memory
         clear_session()
+        
+        # print("Final: memory checkup")
+        # check_system_memory_usage()
         ####
 
     # Returns the validation loss and train loss for the chosen model

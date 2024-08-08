@@ -3,7 +3,7 @@ import tensorflow as tf
 import numpy as np
 import time
 import gc
-
+from UnetClass import UnetClass
 class FederatedWorker:
     def __init__(self, worker_id, nunet_obj, train_x_images, train_y_images, params, worker_epochs:int=100, total_workers:int=4):
         self.worker_id = worker_id
@@ -58,7 +58,7 @@ class FederatedWorker:
         gc.collect()
         return val_loss, train_loss, training_time
 
-    def federated_averaging(global_obj, worker_objs):
+    def federated_averaging(global_obj, worker_objs, compile = True):
         weights = [1/len(worker_objs)]*len(worker_objs)
         avg_weights = [np.zeros_like(w) for w in global_obj.model.get_weights()]
 
@@ -66,14 +66,20 @@ class FederatedWorker:
             local_weights = worker_obj.nunet_obj.model.get_weights()
             for j in range(len(avg_weights)): avg_weights[j] += local_weights[j] * weights[i]
 
-        for i, worker_obj in enumerate(worker_objs): worker_objs[i].nunet_obj.model.set_weights(avg_weights)
+        for i, worker_obj in enumerate(worker_objs): 
+            worker_objs[i].nunet_obj.model.set_weights(avg_weights)
+            if compile : worker_objs[i].nunet_obj.model.compile(optimizer='adam', loss=UnetClass.custom_loss)
+            
         global_obj.model.set_weights(avg_weights)
+        if compile: global_obj.model.compile(optimizer='adam', loss=UnetClass.custom_loss)
 
         # for j in range(len(avg_weights)):
         #     if np.array_equal(global_obj.model.get_weights()[j], avg_weights[j]):
         #         continue
         #     else:
         #         print('weight mismatch')
+        
+        
         # Delete variables and force garbage collection
         del local_weights, weights, i, avg_weights, worker_obj, worker_objs
         gc.collect()
